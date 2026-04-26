@@ -1,0 +1,15 @@
+{
+    "name": "manuelantunes/wp-graphql-federations",
+    "autoload": {
+        "psr-4": {
+            "Manuelantunes\\WpGraphqlFederations\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Manuel Antunes",
+            "email": "manuelnascimento5589@gmail.com"
+        }
+    ],
+    "require": {}
+}
