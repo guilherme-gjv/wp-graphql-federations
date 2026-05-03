@@ -11,7 +11,7 @@ class Federation {
 		add_action( 'graphql_register_types', [ $instance, 'add_federation_to_nodes' ], 100 );
 	}
 
-	private function get_federated_types() {
+	public function get_federated_types() {
 		$settings = get_option( 'wpgraphql_federation_settings', [] );
 		$types = [];
 		foreach ( $settings as $graphql_name => $config ) {
@@ -19,6 +19,18 @@ class Federation {
 				$types[$graphql_name] = $config;
 			}
 		}
+
+		// Always include core federated types with correct kind/key
+		$core_types = [
+			'User' => [ 'enabled' => true, 'key' => 'id', 'kind' => 'user' ],
+			'Post' => [ 'enabled' => true, 'key' => 'databaseId', 'kind' => 'post_type' ],
+			'UserRole' => [ 'enabled' => true, 'key' => 'id', 'kind' => 'user_role' ],
+		];
+		foreach ( $core_types as $name => $defaults ) {
+			// Force-merge core type config to ensure kind/key are always correct
+			$types[$name] = array_merge( $types[$name] ?? [], $defaults );
+		}
+
 		return $types;
 	}
 
@@ -32,7 +44,9 @@ class Federation {
 				'description' => 'The _Any scalar is used to pass representation objects to the _entities query.',
 				'serialize' => function( $value ) { return $value; },
 				'parseValue' => function( $value ) { return $value; },
-				'parseLiteral' => function( $ast ) { return $ast->value; },
+				'parseLiteral' => function( $ast ) {
+					return self::ast_to_value( $ast );
+				},
 			]);
 		}
 
@@ -52,7 +66,7 @@ class Federation {
 				'resolveType' => function( $type ) {
 					if ( $type instanceof \WPGraphQL\Model\Post ) {
 						$pt = get_post_type_object( $type->post_type );
-						return $pt->graphql_single_name ?? $pt->name;
+						return ucfirst( $pt->graphql_single_name ?? $pt->name );
 					}
 					if ( $type instanceof \WPGraphQL\Model\Term ) {
 						$tax = get_taxonomy( $type->taxonomy );
@@ -199,6 +213,7 @@ class Federation {
 
 	private function resolve_entity( $representation, $context ) {
 		if ( ! isset( $representation['__typename'] ) ) {
+			error_log('Federation: resolve_entity - no __typename');
 			return null;
 		}
 
@@ -206,6 +221,7 @@ class Federation {
 		$federated_types = $this->get_federated_types();
 
 		if ( ! isset( $federated_types[$typename] ) ) {
+			error_log("Federation: resolve_entity - type '$typename' not in federated_types: " . json_encode(array_keys($federated_types)));
 			return null;
 		}
 
@@ -213,6 +229,7 @@ class Federation {
 		$key_field = $config['key'] ?? 'id';
 
 		if ( ! isset( $representation[$key_field] ) ) {
+			error_log("Federation: resolve_entity - key '$key_field' not found in representation: " . json_encode($representation));
 			return null;
 		}
 
@@ -226,18 +243,26 @@ class Federation {
 			$database_id = $id;
 		}
 
-		switch ( $config['kind'] ) {
-			case 'post_type':
-				return \WPGraphQL\Data\Loader::get_element( $database_id, 'post' );
-			case 'taxonomy':
-			case 'term':
-				return \WPGraphQL\Data\Loader::get_element( $database_id, 'term' );
-			case 'user':
-				return \WPGraphQL\Data\Loader::get_element( $database_id, 'user' );
-			case 'comment':
-				return \WPGraphQL\Data\Loader::get_element( $database_id, 'comment' );
+		error_log("Federation: resolve_entity - resolving $typename with $key_field=$database_id, kind={$config['kind']}");
+
+		try {
+			switch ( $config['kind'] ) {
+				case 'post_type':
+					return $context->get_loader( 'post' )->load_deferred( $database_id );
+				case 'taxonomy':
+				case 'term':
+					return $context->get_loader( 'term' )->load_deferred( $database_id );
+				case 'user':
+					return $context->get_loader( 'user' )->load_deferred( $database_id );
+				case 'comment':
+					return $context->get_loader( 'comment' )->load_deferred( $database_id );
+			}
+		} catch ( \Exception $e ) {
+			error_log("Federation: resolve_entity error: " . $e->getMessage());
+			return null;
 		}
 
+		error_log("Federation: resolve_entity - no matching kind for '$typename'");
 		return null;
 	}
 
@@ -248,10 +273,10 @@ class Federation {
 		try {
 			$sdl = \GraphQL\Utils\SchemaPrinter::doPrint( $schema );
 
-			$settings = get_option( 'wpgraphql_federation_settings', [] );
+			$instance = new self();
+			$settings = $instance->get_federated_types();
 
 			foreach ( $settings as $type => $config ) {
-				if ( empty( $config['enabled'] ) ) continue;
 
 				$key = $config['key'] ?? 'id';
  
@@ -291,5 +316,36 @@ class Federation {
 		} catch ( \Exception $e ) {
 			return '';
 		}
+	}
+
+	private static function ast_to_value( $ast ) {
+		if ( $ast instanceof \GraphQL\Language\AST\ObjectValueNode ) {
+			$result = [];
+			foreach ( $ast->fields as $field ) {
+				$result[ $field->name->value ] = self::ast_to_value( $field->value );
+			}
+			return $result;
+		}
+		if ( $ast instanceof \GraphQL\Language\AST\ListValueNode ) {
+			$result = [];
+			foreach ( $ast->values as $value ) {
+				$result[] = self::ast_to_value( $value );
+			}
+			return $result;
+		}
+		if ( $ast instanceof \GraphQL\Language\AST\IntValueNode ) {
+			return (int) $ast->value;
+		}
+		if ( $ast instanceof \GraphQL\Language\AST\FloatValueNode ) {
+			return (float) $ast->value;
+		}
+		if ( $ast instanceof \GraphQL\Language\AST\BooleanValueNode ) {
+			return $ast->value;
+		}
+		if ( $ast instanceof \GraphQL\Language\AST\NullValueNode ) {
+			return null;
+		}
+		// StringValueNode, EnumValueNode, etc.
+		return $ast->value;
 	}
 }
