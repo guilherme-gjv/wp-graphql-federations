@@ -247,23 +247,48 @@ class Federation {
 
 		try {
 			$sdl = \GraphQL\Utils\SchemaPrinter::doPrint( $schema );
-			
-			$federation_directives = '
-scalar _FieldSet
 
-directive @external on FIELD_DEFINITION
-directive @requires(fields: _FieldSet!) on FIELD_DEFINITION
-directive @provides(fields: _FieldSet!) on FIELD_DEFINITION
-directive @key(fields: _FieldSet!, resolvable: Boolean = true) repeatable on OBJECT | INTERFACE
-directive @link(url: String!, import: [String]) repeatable on SCHEMA
-directive @shareable on OBJECT | FIELD_DEFINITION
-directive @authenticated on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM
-directive @requiresScopes(scopes: [[String!]!]!) on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM
-directive @override(from: String!) on FIELD_DEFINITION
-directive @inaccessible on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
-directive @tag(name: String!) repeatable on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
-';
+			$settings = get_option( 'wpgraphql_federation_settings', [] );
+
+			foreach ( $settings as $type => $config ) {
+				if ( empty( $config['enabled'] ) ) continue;
+
+				$key = $config['key'] ?? 'id';
+
+				// injeta @key no type
+				$sdl = preg_replace_callback(
+					"/type\s+{$type}\b([^\\{]*)\{/",
+					function ($matches) use ($type, $key) {
+						$signature = trim($matches[1]);
+	
+						if (strpos($signature, '@key') !== false) {
+							return "type {$type} {$signature} {";
+						}
+
+						return "type {$type} {$signature} @key(fields: \"{$key}\") {";
+					},  
+					$sdl
+				);
+			}
+
+			$federation_directives = '
+	scalar _FieldSet
+
+	directive @external on FIELD_DEFINITION
+	directive @requires(fields: _FieldSet!) on FIELD_DEFINITION
+	directive @provides(fields: _FieldSet!) on FIELD_DEFINITION
+	directive @key(fields: _FieldSet!, resolvable: Boolean = true) repeatable on OBJECT | INTERFACE
+	directive @link(url: String!, import: [String]) repeatable on SCHEMA
+	directive @shareable on OBJECT | FIELD_DEFINITION
+	directive @authenticated on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM
+	directive @requiresScopes(scopes: [[String!]!]!) on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM
+	directive @override(from: String!) on FIELD_DEFINITION
+	directive @inaccessible on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
+	directive @tag(name: String!) repeatable on FIELD_DEFINITION | OBJECT | INTERFACE | SCALAR | ENUM | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION
+	';
+
 			return $sdl . $federation_directives;
+
 		} catch ( \Exception $e ) {
 			return '';
 		}
