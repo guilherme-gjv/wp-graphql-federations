@@ -254,8 +254,7 @@ class Federation {
 				if ( empty( $config['enabled'] ) ) continue;
 
 				$key = $config['key'] ?? 'id';
-
-				// injeta @key no type
+ 
 				$sdl = preg_replace_callback(
 					"/type\s+{$type}\b([^\\{]*)\{/",
 					function ($matches) use ($type, $key) {
